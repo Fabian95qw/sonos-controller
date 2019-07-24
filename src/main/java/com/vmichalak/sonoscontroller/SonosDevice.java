@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 
 public class SonosDevice {
 
@@ -14,6 +15,14 @@ public class SonosDevice {
 
     public SonosDevice(String ip) {
         this.ip = ip;
+    }
+
+    /**
+     * Gets the remote IP address of this device.
+     * @return Returns the remote IP address of the device.
+     */
+    public String getIpAddress() {
+    	return this.ip;        
     }
 
     //<editor-fold desc="AV TRANSPORT">
@@ -30,13 +39,15 @@ public class SonosDevice {
     /**
      * Play a given stream. Pauses the queue.
      * @param uri URI of a stream to be played.
-     * @param meta The track metadata to show in the player (DIDL format).
+     * @param metadata The track metadata to show in the player (DIDL format).
      * @throws IOException
      * @throws SonosControllerException
      */
-    public void playUri(String uri, String metadata) throws IOException, SonosControllerException {
+    public void playUri(String uri, TrackMetadata metadata) throws IOException, SonosControllerException {
+        String metadataString = "";
+        if(metadata != null) { metadataString = metadata.toDIDL(); }
         CommandBuilder.transport("SetAVTransportURI").put("InstanceID", "0").put("CurrentURI", uri)
-                .put("CurrentURIMetaData", metadata).executeOn(this.ip);
+                .put("CurrentURIMetaData", metadataString).executeOn(this.ip);
         this.play();
     }
 
@@ -46,7 +57,7 @@ public class SonosDevice {
      */
     public void playFromQueue(int queueIndex) throws IOException, SonosControllerException {
         if(queueIndex < 0) { throw new IllegalArgumentException("Queue index cannot be < 0."); }
-        this.playUri("x-rincon-queue:" + this.getSpeakerInfo().getLocalUID() + "#0", "");
+        this.playUri("x-rincon-queue:" + this.getSpeakerInfo().getLocalUID() + "#0", null);
         CommandBuilder.transport("Seek").put("InstanceID", "0").put("Unit", "TRACK_NR")
                 .put("Target", String.valueOf(queueIndex)).executeOn(this.ip);
         this.play();
@@ -61,18 +72,84 @@ public class SonosDevice {
      * @throws SonosControllerException
      * @throws InterruptedException
      */
-    public void clip(String uri, String metadata) throws IOException, SonosControllerException, InterruptedException {
+    public void clip(String uri, TrackMetadata metadata) throws IOException, SonosControllerException, InterruptedException {
         PlayState previousState = this.getPlayState();
         TrackInfo previous = this.getCurrentTrackInfo();
         this.playUri(uri, metadata);
         while (!this.getPlayState().equals(PlayState.STOPPED)) { Thread.sleep(500); }
-        this.playUri("x-rincon-queue:" + this.getSpeakerInfo().getLocalUID() + "#0", "");
+        this.playUri("x-rincon-queue:" + this.getSpeakerInfo().getLocalUID() + "#0", null);
         CommandBuilder.transport("Seek").put("InstanceID", "0").put("Unit", "TRACK_NR")
                 .put("Target", String.valueOf(previous.getQueueIndex())).executeOn(this.ip);
         this.seek(previous.getPosition());
         if(previousState.equals(PlayState.PLAYING)) { this.play(); } else { this.pause(); }
     }
+    
+    /**
+     * Gets favorites from the sonosdevice.
+     * @throws IOException
+     * @throws SonosControllerException
+     * @param startingIndex
+     * @param requestedCount
+     * @param directory to search (FV:0/1/2)
+     * @return Returns a List of favorites
+     */
+    public List<Favorite> getFavorites(Integer startingIndex, Integer requestedCount, String Directory) throws IOException, SonosControllerException
+    {
+    	String r = CommandBuilder.contentDirectory("Browse")
+    			.put("ObjectID", Directory)
+    			.put("BrowseFlag", "BrowseDirectChildren")
+    			.put("Filter", "")
+    			.put("StartingIndex", String.valueOf(startingIndex))
+    			.put("RequestedCount", String.valueOf(requestedCount))
+                .put("SortCriteria", "").executeOn(this.ip);
+        List<String> itemsNonParsed = ParserHelper.findAll("<item .+?(?=>)>(.+?(?=</item>))", r);
+        List<Favorite> itemsParsed = new ArrayList<Favorite>();
+        for (String s : itemsNonParsed) {
+            itemsParsed.add(Favorite.parse(s));
+        }
+        return itemsParsed;
+    }
 
+    /**
+     * Gets favorites from the sonosdevice.
+     * @throws IOException
+     * @throws SonosControllerException
+     * @param startingIndex
+     * @param requestedCount
+     * @return Returns a List of favorites
+     */
+    public List<Favorite> getFavoriteRadioStations(Integer startingIndex, Integer requestedCount) throws IOException, SonosControllerException
+    {
+    	return getFavorites(startingIndex, requestedCount, CommandBuilder.RADIO_STATIONS);
+    }
+    
+    /**
+     * Gets favorites from the sonosdevice.
+     * @throws IOException
+     * @throws SonosControllerException
+     * @param startingIndex
+     * @param requestedCount
+     * @return Returns a List of favorites
+     */
+    public List<Favorite> getFavoriteRadioShows(Integer startingIndex, Integer requestedCount) throws IOException, SonosControllerException
+    {
+    	return getFavorites(startingIndex, requestedCount, CommandBuilder.RADIO_SHOWS);
+    }
+    
+    /**
+     * Gets favorites from the sonosdevice.
+     * @throws IOException
+     * @throws SonosControllerException
+     * @param startingIndex
+     * @param requestedCount
+     * @return Returns a List of favorites
+     */
+    public List<Favorite> getSonosFavorites(Integer startingIndex, Integer requestedCount) throws IOException, SonosControllerException
+    {
+    	return getFavorites(startingIndex, requestedCount, CommandBuilder.SONOS_FAVORITES);
+    }
+    
+    
     /**
      * Pause the currently playing track.
      * @throws IOException
@@ -138,9 +215,11 @@ public class SonosDevice {
      * @throws IOException
      * @throws SonosControllerException
      */
-    public void addToQueue(String uri, String metadata) throws IOException, SonosControllerException {
+    public void addToQueue(String uri, TrackMetadata metadata) throws IOException, SonosControllerException {
+        String metadataString = "";
+        if(metadata != null) { metadataString = metadata.toDIDL(); }
         CommandBuilder.transport("AddURIToQueue").put("InstanceID", "0").put("EnqueuedURI", uri)
-                .put("EnqueuedURIMetaData", metadata).put("DesiredFirstTrackNumberEnqueued", "0")
+                .put("EnqueuedURIMetaData", metadataString).put("DesiredFirstTrackNumberEnqueued", "0")
                 .put("EnqueueAsNext", "1").executeOn(this.ip);
     }
 
@@ -487,12 +566,40 @@ public class SonosDevice {
 
     //<editor-fold desc="DEVICE">
 
+    /**
+     * Get the zone name. (for exemple: "Bedroom + 1", "Living Room", ...)
+     * @return the zone name.
+     * @throws IOException
+     * @throws SonosControllerException
+     */
     public String getZoneName() throws IOException, SonosControllerException {
-        return this.getSpeakerInfo().getZoneName();
+        return this.getZoneGroupState().getName();
     }
 
-    public void setZoneName(String zoneName) throws IOException, SonosControllerException {
-        CommandBuilder.device("SetZoneAttributes").put("DesiredZoneName", zoneName).put("DesiredIcon", "")
+    /**
+     * Get the room name. (for exemple: "Bedroom", "Living Room", ...)
+     * @return the room name.
+     * @throws IOException
+     * @throws SonosControllerException
+     */
+    public String getRoomName() throws IOException, SonosControllerException {
+        String r = CommandBuilder.download(this.ip, "xml/device_description.xml");
+        r = Pattern.compile("<deviceList>.*</deviceList>", Pattern.DOTALL).matcher(r).replaceFirst("");
+        return ParserHelper.findOne("<roomName>(.*)</roomName>", r);
+    }
+
+    /**
+     * Get the device name. (for exemple: "Bedroom (L)", "Bedroom (R)", ...)
+     * @return the device name.
+     * @throws IOException
+     * @throws SonosControllerException
+     */
+    public String getDeviceName() throws IOException, SonosControllerException {
+        return this.getSpeakerInfo().getDeviceName();
+    }
+
+    public void setRoomName(String roomName) throws IOException, SonosControllerException {
+        CommandBuilder.device("SetZoneAttributes").put("DesiredZoneName", roomName).put("DesiredIcon", "")
                 .put("DesiredConfiguration", "").executeOn(this.ip);
     }
 
@@ -564,9 +671,9 @@ public class SonosDevice {
      * @throws SonosControllerException
      */
     public SonosSpeakerInfo getSpeakerInfo() throws IOException, SonosControllerException {
-        String responseString = CommandBuilder.downloadSpeakerInfo(this.ip);
+        String responseString = CommandBuilder.download(ip, "status/zp");
 
-        String zoneName                 = ParserHelper.findOne("<ZoneName>(.*)</ZoneName>", responseString);
+        String deviceName               = ParserHelper.findOne("<ZoneName>(.*)</ZoneName>", responseString);
         String zoneIcon                 = ParserHelper.findOne("<ZoneIcon>(.*)</ZoneIcon>", responseString);
         String configuration            = ParserHelper.findOne("<Configuration>(.*)</Configuration>", responseString);
         String localUID                 = ParserHelper.findOne("<LocalUID>(.*)</LocalUID>", responseString);
@@ -604,7 +711,7 @@ public class SonosDevice {
         String regState                 = ParserHelper.findOne("<RegState>(.*)</RegState>", responseString);
         String customerID               = ParserHelper.findOne("<CustomerID>(.*)</CustomerID>", responseString);
 
-        return new SonosSpeakerInfo(zoneName, zoneIcon, configuration, localUID, serialNumber, softwareVersion,
+        return new SonosSpeakerInfo(deviceName, zoneIcon, configuration, localUID, serialNumber, softwareVersion,
                 softwareDate, softwareScm, minCompatibleVersion, legacyCompatibleVersion, hardwareVersion, dspVersion,
                 hwFlags, hwFeatures, variant, generalFlags, ipAddress, macAddress, copyright, extraInfo, htAudioInCode,
                 idxTrk, mdp2Ver, mdp3Ver, relBuild, whitelistBuild, prodUnit, fuseCfg, revokeFuse, authFlags,
